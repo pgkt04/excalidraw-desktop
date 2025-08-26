@@ -25,7 +25,6 @@
 # Icon must end with two \r
 Icon
 
-
 # Thumbnails
 ._*
 
@@ -87,7 +86,7 @@ bower_components
 # node-waf configuration
 .lock-wscript
 
-# Compiled binary addons (https://nodejs.org/api/addons.html)
+# Compiled binary addons (https://nodejs.org/api/addons/)
 build/Release
 
 # Dependency directories
@@ -141,7 +140,6 @@ out
 
 # Nuxt.js build / generate output
 .nuxt
-dist
 
 # Gatsby files
 .cache/
@@ -247,4 +245,12 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
-# End of https://www.toptal.com/developers/gitignore/api/windows,macos,react,node,linux,visualstudiocode
+# --- Recommended Additions for Linux Release Artifacts ---
+
+# Ignore dist/ by default (if you have this line, keep it)
+dist/
+
+# But allow these specific release files to be committed/tracked
+!dist/Excalidraw-1.0.0.AppImage
+!dist/excalidraw_1.0.0_amd64.deb
+!dist/excalidraw-linux64.zip
