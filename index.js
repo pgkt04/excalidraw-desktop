@@ -11,7 +11,8 @@ function createWindow() {
 
   win.loadURL('https://excalidraw.com/');
 
-  if (process.platform === 'win32') {
+  // Hide menu for Windows and Linux
+  if (process.platform === 'win32' || process.platform === 'linux') {
     const emptyMenu = Menu.buildFromTemplate([]);
     Menu.setApplicationMenu(emptyMenu);
   }

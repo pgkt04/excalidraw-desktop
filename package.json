@@ -6,12 +6,15 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "electron .",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "dist:linux": "electron-builder --linux",
+    "dist:appimage": "electron-builder --linux AppImage",
+    "dist:deb": "electron-builder --linux deb"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Excalidraw desktop application for Linux, Windows, and Mac.",
   "devDependencies": {
     "electron": "^32.1.2",
     "electron-builder": "^25.0.5"
@@ -43,6 +46,15 @@
     "msi": {
       "oneClick": false,
       "perMachine": false
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "build/icon.png",
+      "category": "Graphics",
+      "maintainer": "WeWeBunnyX <145664273+WeWeBunnyX@users.noreply.github.com>"
     }
   }
 }
