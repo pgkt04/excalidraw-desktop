@@ -6,7 +6,9 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "electron .",
-    "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
     "dist:linux": "electron-builder --linux",
     "dist:appimage": "electron-builder --linux AppImage",
     "dist:deb": "electron-builder --linux deb"
