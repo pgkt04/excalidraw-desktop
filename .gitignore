@@ -247,4 +247,7 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
+# Tauri / Rust
+src-tauri/target/
+
 # End of https://www.toptal.com/developers/gitignore/api/windows,macos,react,node,linux,visualstudiocode
