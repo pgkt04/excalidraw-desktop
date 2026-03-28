@@ -33,6 +33,15 @@
       "index.js",
       "package.json"
     ],
+    "fileAssociations": [
+      {
+        "ext": "excalidraw",
+        "name": "Excalidraw Drawing",
+        "description": "Excalidraw drawing file",
+        "mimeType": "application/json",
+        "role": "Editor"
+      }
+    ],
     "mac": {
       "target": [
         {
