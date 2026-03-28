@@ -34,7 +34,12 @@
       "package.json"
     ],
     "mac": {
-      "target": "dmg",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": "arm64"
+        }
+      ],
       "category": "public.app-category.graphics-design",
       "icon": "build/icon.icns"
     },
