@@ -55,13 +55,16 @@
     "win": {
       "target": [
         "portable",
-        "msi"
+        "nsis"
       ],
       "icon": "build/icon2.ico"
     },
-    "msi": {
+    "nsis": {
       "oneClick": false,
-      "perMachine": false
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopIcon": true,
+      "include": "build/installer.nsh"
     },
     "linux": {
       "target": [

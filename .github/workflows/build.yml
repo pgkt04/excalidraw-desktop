@@ -67,7 +67,6 @@ jobs:
           name: windows-x64
           path: |
             dist/*.exe
-            dist/*.msi
           if-no-files-found: error
 
   build-linux:
@@ -131,6 +130,5 @@ jobs:
           files: |
             artifacts/**/*.dmg
             artifacts/**/*.exe
-            artifacts/**/*.msi
             artifacts/**/*.AppImage
             artifacts/**/*.deb
