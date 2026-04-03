@@ -10,25 +10,28 @@
 ;   customInstall undoes the auto-registration. Desktop shortcut is created
 ;   manually since createDesktopShortcut is set to false in package.json.
 ;   The uninstaller always cleans up both.
+;
+; Note: electron-builder compiles NSIS twice (uninstaller pass + installer pass).
+;   This .nsh is included in both passes as a shared header. Functions and variables
+;   for the custom page are guarded with !ifndef BUILD_UNINSTALLER so they only
+;   exist in the installer pass (where customPageAfterChangeDir is expanded).
+;   Without this guard, NSIS warns about unreferenced functions in the uninstaller
+;   pass, and electron-builder's -WX flag promotes that to a fatal error.
 
 !include "LogicLib.nsh"
 !include "WinMessages.nsh"
 !include "nsDialogs.nsh"
 
-; Variables for file association checkbox
+; -------------------------------------------------------------------
+; Installer-only: variables and page functions
+; (guarded to avoid "unreferenced function" warning in uninstaller pass)
+; -------------------------------------------------------------------
+!ifndef BUILD_UNINSTALLER
+
 Var FileAssocCheckbox
 Var FileAssocState
-
-; Variables for desktop shortcut checkbox
 Var DesktopShortcutCheckbox
 Var DesktopShortcutState
-
-; -------------------------------------------------------------------
-; Custom page: additional options (after directory selection)
-; -------------------------------------------------------------------
-!macro customPageAfterChangeDir
-  Page custom OptionsPageCreate OptionsPageLeave
-!macroend
 
 Function OptionsPageCreate
   ; Skip on silent/update installs
@@ -81,9 +84,18 @@ Function OptionsPageLeave
   ${EndIf}
 FunctionEnd
 
+!endif ; !ifndef BUILD_UNINSTALLER
+
 ; -------------------------------------------------------------------
+; Macros: expanded by electron-builder in the correct pass context
+; -------------------------------------------------------------------
+
+; Custom page inserted after directory selection (installer pass only)
+!macro customPageAfterChangeDir
+  Page custom OptionsPageCreate OptionsPageLeave
+!macroend
+
 ; After install: apply user choices
-; -------------------------------------------------------------------
 !macro customInstall
   ; File association: electron-builder already called registerFileAssociations.
   ; If the user unchecked the box, undo it.
@@ -98,9 +110,7 @@ FunctionEnd
   ${EndIf}
 !macroend
 
-; -------------------------------------------------------------------
 ; Uninstall: always clean up everything
-; -------------------------------------------------------------------
 !macro customUnInstall
   !insertmacro APP_UNASSOCIATE "excalidraw" "Excalidraw.Drawing"
   !insertmacro UPDATEFILEASSOC
