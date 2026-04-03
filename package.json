@@ -63,7 +63,7 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopIcon": true,
+      "createDesktopShortcut": false,
       "include": "build/installer.nsh"
     },
     "linux": {
