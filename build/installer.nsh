@@ -11,7 +11,9 @@
 ;   manually since createDesktopShortcut is set to false in package.json.
 ;   The uninstaller always cleans up both.
 
-!include "FileAssociation.nsh"
+!include "LogicLib.nsh"
+!include "WinMessages.nsh"
+!include "nsDialogs.nsh"
 
 ; Variables for file association checkbox
 Var FileAssocCheckbox
@@ -30,9 +32,9 @@ Var DesktopShortcutState
 
 Function OptionsPageCreate
   ; Skip on silent/update installs
-  ${if} ${isUpdated}
+  ${If} ${isUpdated}
     Abort
-  ${endif}
+  ${EndIf}
 
   nsDialogs::Create 1018
   Pop $0
@@ -40,7 +42,13 @@ Function OptionsPageCreate
     Abort
   ${EndIf}
 
-  !insertmacro MUI_HEADER_TEXT "Additional Options" "Configure additional installation options."
+  ; Set header text directly via SendMessage. MUI_HEADER_TEXT is not available
+  ; because this .nsh is included before MUI2.nsh in electron-builder's
+  ; generated script. Control IDs 1037/1038 are the MUI header text controls.
+  GetDlgItem $0 $HWNDPARENT 1037
+  SendMessage $0 ${WM_SETTEXT} 0 "STR:Additional Options"
+  GetDlgItem $0 $HWNDPARENT 1038
+  SendMessage $0 ${WM_SETTEXT} 0 "STR:Configure additional installation options."
 
   ; File association checkbox (checked by default)
   ${NSD_CreateCheckbox} 0 0 100% 12u "Associate .excalidraw files with Excalidraw"
@@ -79,15 +87,15 @@ FunctionEnd
 !macro customInstall
   ; File association: electron-builder already called registerFileAssociations.
   ; If the user unchecked the box, undo it.
-  ${if} $FileAssocState == "0"
+  ${If} $FileAssocState == "0"
     !insertmacro APP_UNASSOCIATE "excalidraw" "Excalidraw.Drawing"
     !insertmacro UPDATEFILEASSOC
-  ${endif}
+  ${EndIf}
 
   ; Desktop shortcut: create only if the user checked the box.
-  ${if} $DesktopShortcutState == "1"
+  ${If} $DesktopShortcutState == "1"
     CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$appExe"
-  ${endif}
+  ${EndIf}
 !macroend
 
 ; -------------------------------------------------------------------
