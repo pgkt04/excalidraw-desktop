@@ -39,7 +39,8 @@
         "name": "Excalidraw Drawing",
         "description": "Excalidraw drawing file",
         "mimeType": "application/json",
-        "role": "Editor"
+        "role": "Editor",
+        "icon": "build/icon2.ico"
       }
     ],
     "mac": {
