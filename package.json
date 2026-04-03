@@ -36,11 +36,11 @@
     "fileAssociations": [
       {
         "ext": "excalidraw",
-        "name": "Excalidraw Drawing",
+        "name": "Excalidraw.Drawing",
         "description": "Excalidraw drawing file",
         "mimeType": "application/json",
         "role": "Editor",
-        "icon": "build/icon2.ico"
+        "icon": "icon2.ico"
       }
     ],
     "mac": {
