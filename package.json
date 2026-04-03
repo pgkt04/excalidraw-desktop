@@ -1,7 +1,7 @@
 {
   "name": "excalidraw",
   "productName": "Excalidraw",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -33,6 +33,16 @@
       "index.js",
       "package.json"
     ],
+    "fileAssociations": [
+      {
+        "ext": "excalidraw",
+        "name": "Excalidraw.Drawing",
+        "description": "Excalidraw drawing file",
+        "mimeType": "application/json",
+        "role": "Editor",
+        "icon": "icon2.ico"
+      }
+    ],
     "mac": {
       "target": [
         {
@@ -46,13 +56,16 @@
     "win": {
       "target": [
         "portable",
-        "msi"
+        "nsis"
       ],
       "icon": "build/icon2.ico"
     },
-    "msi": {
+    "nsis": {
       "oneClick": false,
-      "perMachine": false
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": false,
+      "include": "build/installer.nsh"
     },
     "linux": {
       "target": [
