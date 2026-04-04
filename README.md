@@ -1,63 +1,67 @@
 # excalidraw-desktop
-Unofficial desktop client for Excalidraw on Windows &amp; MacOS. It is just an electron wrapper for the website, I made this because I don't want to use it in a tab.
+Unofficial desktop client for Excalidraw on Windows, macOS, and Linux. It is just an electron wrapper for the website, I made this because I don't want to use it in a tab.
+
+> **Note:** This loads the live [excalidraw.com](https://excalidraw.com) website — an internet connection is needed for the first launch. Subsequent launches may work offline thanks to browser caching.
 
 ![windows client](./resources/windows.png)
 
-# Installation
-Head over to the [releases page](https://github.com/pgkt04/excalidraw-desktop/releases/). Follow these steps:
-1. Visit the [Releases](https://github.com/pgkt04/excalidraw-desktop/releases/) page.
-2. Download the appropriate installer for your operating system:
-3. Once downloaded, run the installer and follow the on-screen instructions to install the Excalidraw desktop client.
+## Installation
+Head over to the [Releases](https://github.com/pgkt04/excalidraw-desktop/releases/) page and download the appropriate installer for your operating system:
 
-## Macos Users
-If you get the error "Is Damaged and Can’t Be Opened. You Should Move It To The Bin".  
-You can run the command:
+| Platform | Format |
+|----------|--------|
+| macOS | `.dmg` (Apple Silicon) |
+| Windows | Setup `.exe` or Portable `.exe` |
+| Linux | `.AppImage` or `.deb` |
+
+### macOS
+If you get the error "Is Damaged and Can't Be Opened. You Should Move It To The Bin", run:
 ```bash
 xattr -c /Applications/Excalidraw.app
 ```
-This is because I don't have a developer certificate and its not notarized.
+This is because I don't have a developer certificate and it's not notarized.
 
-# Development or Building
-Before building the project, ensure you have the following prerequisites installed on your system:
+### Linux (AppImage)
+After downloading, make the AppImage executable:
+```bash
+chmod +x Excalidraw-*.AppImage
+./Excalidraw-*.AppImage
+```
 
-Prerequisites
-Node.js (version 14.x or higher)
-npm (comes with Node.js)
-To clone and set up the project, follow these steps:
+## File Association
+The app registers itself as a handler for `.excalidraw` files. You can double-click any `.excalidraw` file to open it directly in the app. On Windows (NSIS installer), you'll be prompted during installation; on macOS and Linux, it's automatic.
+
+## Development
+Before building the project, ensure you have the following prerequisites installed:
+
+- Node.js (version 18.x or higher)
+- npm (comes with Node.js)
 
 Clone the repository:
-
 ```bash
-git clone https://github.com/yourusername/excalidraw-desktop.git
+git clone https://github.com/pgkt04/excalidraw-desktop.git
 cd excalidraw-desktop
 ```
-Install the dependencies:
 
+Install the dependencies:
 ```bash
 npm install
 ```
 
-## Running
-Once the dependencies are installed, you can start the application in development mode.
-
+### Running
 To run the app in development mode:
-
 ```bash
-npm run start
+npm start
 ```
-This command will open the Excalidraw desktop client in a development window.
 
-## Building
-To create a production build and generate executable installers for both Windows and macOS:
+### Building
+To create a production build:
 
-Run the following command:
+| Command | Platform | Output |
+|---------|----------|--------|
+| `npm run dist` | Current OS | Depends on platform |
+| `npm run dist:mac` | macOS | `.dmg` (arm64) |
+| `npm run dist:win` | Windows | Portable `.exe` + NSIS Setup `.exe` |
+| `npm run dist:linux` | Linux | `.AppImage` + `.deb` |
 
-```bash
-npm run dist
-```
-This will package the application into a distribution format (e.g., .exe for Windows and .dmg for macOS), which you can then share or install.
-
-The generated installers will be found in the dist folder.
-
- 
-
+The generated installers will be in the `dist/` folder.
