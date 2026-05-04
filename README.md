@@ -31,6 +31,16 @@ chmod +x Excalidraw-*.AppImage
 ## File Association
 The app registers itself as a handler for `.excalidraw` files. You can double-click any `.excalidraw` file to open it directly in the app. On Windows (NSIS installer), you'll be prompted during installation; on macOS and Linux, it's automatic.
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=pgkt04%2Fexcalidraw-desktop&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=pgkt04/excalidraw-desktop&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=pgkt04/excalidraw-desktop&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=pgkt04/excalidraw-desktop&type=date&legend=top-left" />
+ </picture>
+</a>
+
 ## Development
 Before building the project, ensure you have the following prerequisites installed:
 
