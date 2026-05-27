@@ -134,7 +134,7 @@ function showUpdateNotification(release) {
 
   const latestVersion = normalizeVersion(release.tag_name);
   const notification = new Notification({
-    title: `Spotify ${latestVersion} available`,
+    title: `Electronfy ${latestVersion} available`,
     body: `Current version ${app.getVersion()}. Click to open release page.`,
   });
 
@@ -153,8 +153,8 @@ function showUpdateDialog(release) {
   dialog
     .showMessageBox({
       type: 'info',
-      title: `Spotify ${latestVersion} available`,
-      message: `Spotify ${latestVersion} is available.`,
+      title: `Electronfy ${latestVersion} available`,
+      message: `Electronfy ${latestVersion} is available.`,
       detail: `Current version ${app.getVersion()}.`,
       buttons: ['Open Release', 'Cancel'],
       defaultId: 0,
@@ -176,7 +176,7 @@ function showNoUpdateDialog() {
     .showMessageBox({
       type: 'info',
       title: 'No Updates Available',
-      message: 'Spotify is up to date.',
+      message: 'Electronfy is up to date.',
       detail: `Current version ${app.getVersion()}.`,
       buttons: ['OK'],
     })
@@ -309,7 +309,7 @@ const template = [
   ...(process.platform === 'darwin'
     ? [
         {
-          label: 'Spotify',
+          label: 'Electronfy',
           submenu: [
             { role: 'about' },
             {
