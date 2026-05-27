@@ -5,8 +5,6 @@ Name of App is actually "Electronfy", in order to avoid any problem during insta
 
 > **Note:** This loads the live [spotify.com](https://open.spotify.com) website — an internet connection is needed for the first launch. Subsequent launches may work offline thanks to browser caching.
 
-![windows client](./resources/windows.png)
-
 ## Installation
 Head over to the [Releases](https://github.com/pprol/spotify-desktop/releases/) page and download the appropriate installer for your operating system:
 
