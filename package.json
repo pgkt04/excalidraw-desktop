@@ -18,8 +18,8 @@
   "license": "ISC",
   "description": "Excalidraw desktop application for Linux, Windows, and Mac.",
   "devDependencies": {
-    "electron": "^42.0.0",
-    "electron-builder": "^26.8.1"
+    "electron": "^42.3.3",
+    "electron-builder": "^26.15.0"
   },
   "build": {
     "appId": "app.excalidraw",
