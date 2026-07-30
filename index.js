@@ -375,6 +375,28 @@ async function hashCanvasState(win) {
   return hashContent(data);
 }
 
+// Right after a fresh load/reload, excalidraw.com's own app can still be
+// restoring/normalizing elements and re-writing them to localStorage via its
+// debounced autosave for a brief moment after 'did-finish-load' fires. Hashing
+// immediately can capture a pre-normalization snapshot as the baseline, which
+// will then never match the (already-normalized) live state read on the next
+// dirty-check — a false-positive "unsaved changes" prompt on the very next
+// file switch. Poll until two consecutive reads agree (or give up) so the
+// baseline reflects the settled state.
+async function waitForStableCanvasHash(win, { intervalMs = 150, maxWaitMs = 1500 } = {}) {
+  let previous = await hashCanvasState(win);
+  const deadline = Date.now() + maxWaitMs;
+
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    const current = await hashCanvasState(win);
+    if (current === previous) return current;
+    previous = current;
+  }
+
+  return previous;
+}
+
 async function hasUnsavedChanges(win) {
   const state = windowState.get(win.id);
   if (!state) return false;
@@ -456,7 +478,7 @@ function loadFileIntoWindow(win, filePath) {
             const state = windowState.get(win.id);
             if (state) {
               state.currentFilePath = filePath;
-              state.lastSavedSnapshotHash = await hashCanvasState(win);
+              state.lastSavedSnapshotHash = await waitForStableCanvasHash(win);
               win.setTitle(`${path.basename(filePath)} — Excalidraw`);
               notifyCurrentFileChanged(win);
             }
@@ -527,7 +549,7 @@ async function saveCurrentWindow(win) {
 
   try {
     await writeCanvasToFile(state.currentFilePath, data);
-    state.lastSavedSnapshotHash = hashData(data);
+    state.lastSavedSnapshotHash = hashContent(data);
     refreshFileList(win);
     return true;
   } catch (err) {
@@ -557,7 +579,7 @@ async function saveAsCurrentWindow(win) {
   try {
     await writeCanvasToFile(chosenPath, data);
     state.currentFilePath = chosenPath;
-    state.lastSavedSnapshotHash = hashData(data);
+    state.lastSavedSnapshotHash = hashContent(data);
     win.setTitle(`${path.basename(chosenPath)} — Excalidraw`);
     notifyCurrentFileChanged(win);
 
@@ -908,6 +930,25 @@ function createWindow(filePath) {
   if (filePath) {
     contentView.webContents.once('did-finish-load', () => {
       loadFileIntoWindow(win, filePath);
+    });
+  } else {
+    // A brand-new window with no file yet still loads excalidraw.com's last
+    // persisted localStorage content — it's the same session/profile shared
+    // across windows and app restarts, so leftover elements from a previous
+    // drawing can still be sitting there. Since no file is loaded yet,
+    // hasUnsavedChanges() falls into its "never saved" check (elements.length
+    // > 0), which would then see that leftover content and show a
+    // false-positive save prompt the first time this window opens/creates a
+    // file, even though nothing was drawn here. Clear it so a fresh window
+    // actually starts blank.
+    contentView.webContents.once('did-finish-load', () => {
+      contentView.webContents.executeJavaScript(`
+        try {
+          localStorage.setItem("excalidraw", "[]");
+          localStorage.setItem("excalidraw-state", "{}");
+          localStorage.setItem("excalidraw-files", "{}");
+        } catch (e) {}
+      `);
     });
   }
 
