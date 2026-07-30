@@ -901,6 +901,25 @@ function createWindow(filePath) {
     forceClosing: false,
   });
 
+  // Intercept Ctrl+S at the webContents level: on Linux/Windows the menu bar is
+  // hidden, which breaks Electron's menu-accelerator dispatch, so CmdOrCtrl+S
+  // would otherwise fall through to excalidraw.com's own Ctrl+S handler.
+  const handleSaveShortcut = (event, input) => {
+    if (input.type !== 'keyDown' || input.isAutoRepeat) return;
+    if (!(input.control || input.meta) || input.alt) return;
+    if (input.key.toLowerCase() !== 's') return;
+
+    event.preventDefault();
+    if (input.shift) {
+      void saveAsCurrentWindow(win);
+    } else {
+      void saveCurrentWindow(win);
+    }
+  };
+
+  contentView.webContents.on('before-input-event', handleSaveShortcut);
+  sidebarView.webContents.on('before-input-event', handleSaveShortcut);
+
   if (sidebarVisible) {
     win.contentView.addChildView(sidebarView);
   }
