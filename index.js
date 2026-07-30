@@ -424,12 +424,27 @@ function loadFileIntoWindow(win, filePath) {
       // callers of this function), which would wait on a second did-finish-load
       // that never fires. executeJavaScript works fine as soon as the DOM/localStorage
       // exist, and the reload() below re-reads whatever we just set regardless.
+      //
+      // excalidraw.com flushes its own pending debounced autosave synchronously
+      // on 'beforeunload'/'unload' (LocalData.flushSave() in its App.tsx), which
+      // fires the instant reload() below starts navigating away — i.e. strictly
+      // AFTER we've written here. If a save was still pending (which is common,
+      // since its debounce resets on nearly any interaction, including moving
+      // the mouse toward the button that got us here), that flush silently
+      // overwrites what we just wrote with stale pre-navigation elements/appState.
+      // No delay before writing can avoid this, since the flush is triggered by
+      // navigating away, not by a fixed timer. So instead we neutralize further
+      // localStorage writes right after our own, making that flush a no-op —
+      // excalidraw.com calls localStorage.setItem() directly (not a cached
+      // reference), so overriding it here reliably intercepts it.
       contentWebContents
         .executeJavaScript(`
           try {
-            localStorage.setItem("excalidraw", JSON.stringify(${JSON.stringify(elements)}));
-            localStorage.setItem("excalidraw-state", JSON.stringify(${JSON.stringify(appState)}));
-            localStorage.setItem("excalidraw-files", JSON.stringify(${JSON.stringify(files)}));
+            const setItem = Storage.prototype.setItem.bind(localStorage);
+            localStorage.setItem = function () {};
+            setItem("excalidraw", JSON.stringify(${JSON.stringify(elements)}));
+            setItem("excalidraw-state", JSON.stringify(${JSON.stringify(appState)}));
+            setItem("excalidraw-files", JSON.stringify(${JSON.stringify(files)}));
             true;
           } catch(e) {
             console.error("Failed to inject excalidraw data:", e);
