@@ -1,6 +1,7 @@
-const { app, BrowserWindow, Menu, Notification, dialog, screen, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, Notification, dialog, screen, shell, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const GITHUB_OWNER = 'pgkt04';
 const GITHUB_REPO = 'excalidraw-desktop';
@@ -9,11 +10,18 @@ const RELEASES_PAGE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/rel
 const UPDATE_STATE_FILE = 'update-state.json';
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const WINDOW_STATE_FILE = 'window-state.json';
+const WORKSPACE_STATE_FILE = 'workspace-state.json';
 const DEFAULT_WINDOW_BOUNDS = { width: 1300, height: 900 };
+const SIDEBAR_WIDTH = 260;
 
 // Track file paths requested before the app is ready (macOS open-file can fire early)
 let pendingFilePath = null;
 let updateCheckPromise = null;
+
+// Per-window state: { win, contentView, sidebarView, sidebarVisible, workspaceDir, currentFilePath, lastSavedSnapshotHash, forceClosing }
+const windowState = new Map();
+// Per-directory watchers, refcounted across windows: dir -> { watcher, subscribers: Set<winId>, debounceTimer }
+const workspaceWatchers = new Map();
 
 function normalizeVersion(version) {
   return String(version || '')
@@ -106,6 +114,27 @@ function saveWindowState(win) {
     );
   } catch (err) {
     console.error('Failed to save window state:', err);
+  }
+}
+
+function getWorkspaceStatePath() {
+  return path.join(app.getPath('userData'), WORKSPACE_STATE_FILE);
+}
+
+function loadWorkspaceState() {
+  try {
+    return JSON.parse(fs.readFileSync(getWorkspaceStatePath(), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveWorkspaceState(state) {
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true });
+    fs.writeFileSync(getWorkspaceStatePath(), JSON.stringify(state, null, 2));
+  } catch (err) {
+    console.error('Failed to save workspace state:', err);
   }
 }
 
@@ -267,62 +296,584 @@ function getFilePathFromArgv(argv) {
   return null;
 }
 
-// Read a .excalidraw file and inject its contents into the window via localStorage
-async function loadFileIntoWindow(win, filePath) {
-  try {
-    const raw = fs.readFileSync(filePath, 'utf8');
-    const data = JSON.parse(raw);
+function hashData(data) {
+  return crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex');
+}
 
-    const elements = data.elements || [];
-    const appState = data.appState || {};
-    const files = data.files || {};
+function contentWebContentsFor(win) {
+  const state = windowState.get(win.id);
+  return state ? state.contentView.webContents : win.webContents;
+}
 
-    // Wait for the page to finish loading before injecting
-    const inject = () => {
-      win.webContents.executeJavaScript(`
+// executeJavaScript() can occasionally never settle (neither resolve nor reject) —
+// e.g. when called in close proximity to another in-flight call on the same
+// webContents, such as right after a reload triggered by loadFileIntoWindow.
+// Race it against a timeout so callers never hang indefinitely.
+function withTimeout(promise, ms, onTimeoutMessage) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      console.error(onTimeoutMessage);
+      resolve(undefined);
+    }, ms);
+
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        console.error(onTimeoutMessage, err);
+        resolve(undefined);
+      },
+    );
+  });
+}
+
+// Read the current canvas state out of the loaded excalidraw.com page's own
+// localStorage (the same keys it already persists itself as the user draws).
+async function readCanvasStateFromWindow(win) {
+  const result = await withTimeout(
+    contentWebContentsFor(win).executeJavaScript(`
+      (function() {
         try {
-          localStorage.setItem("excalidraw", JSON.stringify(${JSON.stringify(elements)}));
-          localStorage.setItem("excalidraw-state", JSON.stringify(${JSON.stringify(appState)}));
-          localStorage.setItem("excalidraw-files", JSON.stringify(${JSON.stringify(files)}));
-          true;
-        } catch(e) {
-          console.error("Failed to inject excalidraw data:", e);
-          false;
+          return {
+            elements: JSON.parse(localStorage.getItem('excalidraw') || '[]'),
+            appState: JSON.parse(localStorage.getItem('excalidraw-state') || '{}'),
+            files: JSON.parse(localStorage.getItem('excalidraw-files') || '{}'),
+          };
+        } catch (e) {
+          return null;
         }
-      `).then(() => {
-        win.webContents.reload();
-      });
-    };
+      })();
+    `),
+    8000,
+    'Timed out or failed reading canvas state from content view:',
+  );
+  return result === undefined ? null : result;
+}
 
-    if (win.webContents.isLoading()) {
-      win.webContents.once('did-finish-load', inject);
-    } else {
-      inject();
+// Dirty-comparison hash deliberately covers only elements + files (the actual
+// drawing content), not appState — appState carries ephemeral UI/view state
+// (scroll position, zoom, welcome-screen flags, etc.) that Excalidraw mutates
+// on its own even with zero user edits, which caused false-positive "unsaved
+// changes" prompts when it was included.
+function hashContent(data) {
+  return hashData({ elements: data.elements, files: data.files });
+}
+
+async function hashCanvasState(win) {
+  const data = await readCanvasStateFromWindow(win);
+  if (data === null) return null;
+  return hashContent(data);
+}
+
+async function hasUnsavedChanges(win) {
+  const state = windowState.get(win.id);
+  if (!state) return false;
+
+  const data = await readCanvasStateFromWindow(win);
+  if (data === null) return false;
+
+  if (state.lastSavedSnapshotHash === null) {
+    // Never saved yet: only consider it dirty if there's actually something drawn.
+    return Array.isArray(data.elements) && data.elements.length > 0;
+  }
+
+  return hashContent(data) !== state.lastSavedSnapshotHash;
+}
+
+// Read a .excalidraw file and inject its contents into the content view via localStorage.
+// Low-level: does not perform any dirty-check. Use openFileInWindow() for that.
+function loadFileIntoWindow(win, filePath) {
+  const contentWebContents = contentWebContentsFor(win);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(safetyTimer);
+      resolve(value);
+    };
+    // Defensive fallback in case 'did-finish-load' never fires after reload()
+    // for some unforeseen reason — without this, the IPC call awaiting this
+    // promise (Save/Open from the sidebar or menu) would hang forever.
+    const safetyTimer = setTimeout(() => {
+      console.error('Timed out waiting for content view to reload:', filePath);
+      settle(false);
+    }, 15000);
+
+    try {
+      const raw = fs.readFileSync(filePath, 'utf8');
+      const data = JSON.parse(raw);
+
+      const elements = data.elements || [];
+      const appState = data.appState || {};
+      const files = data.files || {};
+
+      // Note: we deliberately don't gate this on contentWebContents.isLoading() —
+      // it can still report true from inside a 'did-finish-load' handler (the very
+      // callers of this function), which would wait on a second did-finish-load
+      // that never fires. executeJavaScript works fine as soon as the DOM/localStorage
+      // exist, and the reload() below re-reads whatever we just set regardless.
+      contentWebContents
+        .executeJavaScript(`
+          try {
+            localStorage.setItem("excalidraw", JSON.stringify(${JSON.stringify(elements)}));
+            localStorage.setItem("excalidraw-state", JSON.stringify(${JSON.stringify(appState)}));
+            localStorage.setItem("excalidraw-files", JSON.stringify(${JSON.stringify(files)}));
+            true;
+          } catch(e) {
+            console.error("Failed to inject excalidraw data:", e);
+            false;
+          }
+        `)
+        .then(() => {
+          contentWebContents.once('did-finish-load', async () => {
+            const state = windowState.get(win.id);
+            if (state) {
+              state.currentFilePath = filePath;
+              state.lastSavedSnapshotHash = await hashCanvasState(win);
+              win.setTitle(`${path.basename(filePath)} — Excalidraw`);
+              notifyCurrentFileChanged(win);
+            }
+            settle(true);
+          });
+          contentWebContents.reload();
+        })
+        .catch((err) => {
+          console.error('Failed to inject .excalidraw file into content view:', err);
+          settle(false);
+        });
+    } catch (err) {
+      console.error('Failed to load .excalidraw file:', err);
+      settle(false);
     }
+  });
+}
+
+// High-level open: checks for unsaved changes first, then reuses loadFileIntoWindow.
+async function openFileInWindow(win, filePath) {
+  if (!win || !filePath) return false;
+
+  if (await hasUnsavedChanges(win)) {
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: ['Save', "Don't Save", 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+      message: 'Do you want to save the changes you made?',
+      detail: "Your changes will be lost if you don't save them.",
+    });
+
+    if (response === 2) return false; // Cancel
+    if (response === 0) {
+      const saved = await saveCurrentWindow(win);
+      if (!saved) return false;
+    }
+  }
+
+  return loadFileIntoWindow(win, filePath);
+}
+
+async function writeCanvasToFile(targetPath, data) {
+  const payload = {
+    type: 'excalidraw',
+    version: 2,
+    source: 'https://excalidraw.com',
+    elements: data.elements,
+    appState: data.appState,
+    files: data.files,
+  };
+  fs.writeFileSync(targetPath, JSON.stringify(payload, null, 2));
+}
+
+async function saveCurrentWindow(win) {
+  const state = windowState.get(win.id);
+  if (!state) return false;
+
+  if (!state.currentFilePath) {
+    return saveAsCurrentWindow(win);
+  }
+
+  const data = await readCanvasStateFromWindow(win);
+  if (!data) {
+    dialog.showErrorBox('Save Failed', 'Could not read the current drawing state.');
+    return false;
+  }
+
+  try {
+    await writeCanvasToFile(state.currentFilePath, data);
+    state.lastSavedSnapshotHash = hashData(data);
+    refreshFileList(win);
+    return true;
   } catch (err) {
-    console.error('Failed to load .excalidraw file:', err);
+    dialog.showErrorBox('Save Failed', err.message || String(err));
+    return false;
   }
 }
 
+async function saveAsCurrentWindow(win) {
+  const state = windowState.get(win.id);
+  if (!state) return false;
+
+  const defaultDir = state.workspaceDir || app.getPath('documents');
+  const { canceled, filePath: chosenPath } = await dialog.showSaveDialog(win, {
+    defaultPath: path.join(defaultDir, 'Untitled.excalidraw'),
+    filters: [{ name: 'Excalidraw Files', extensions: ['excalidraw'] }],
+  });
+
+  if (canceled || !chosenPath) return false;
+
+  const data = await readCanvasStateFromWindow(win);
+  if (!data) {
+    dialog.showErrorBox('Save Failed', 'Could not read the current drawing state.');
+    return false;
+  }
+
+  try {
+    await writeCanvasToFile(chosenPath, data);
+    state.currentFilePath = chosenPath;
+    state.lastSavedSnapshotHash = hashData(data);
+    win.setTitle(`${path.basename(chosenPath)} — Excalidraw`);
+    notifyCurrentFileChanged(win);
+
+    const chosenDir = path.dirname(chosenPath);
+    if (chosenDir !== state.workspaceDir) {
+      setWorkspace(win, chosenDir);
+      saveWorkspaceState({ ...loadWorkspaceState(), lastWorkspaceDir: chosenDir });
+    } else {
+      refreshFileList(win);
+    }
+    return true;
+  } catch (err) {
+    dialog.showErrorBox('Save Failed', err.message || String(err));
+    return false;
+  }
+}
+
+function scanWorkspaceFiles(dir) {
+  if (!dir) return [];
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.excalidraw'))
+      .map((entry) => {
+        const filePath = path.join(dir, entry.name);
+        let mtimeMs = 0;
+        try {
+          mtimeMs = fs.statSync(filePath).mtimeMs;
+        } catch {
+          // Ignore races with concurrent deletion.
+        }
+        return { path: filePath, mtimeMs };
+      })
+      .sort((a, b) => a.path.localeCompare(b.path));
+  } catch (err) {
+    console.error('Failed to scan workspace folder:', err);
+    return [];
+  }
+}
+
+function notifyFilesChanged(win) {
+  const state = windowState.get(win.id);
+  if (!state) return;
+  state.sidebarView.webContents.send('workspace:filesChanged', scanWorkspaceFiles(state.workspaceDir));
+}
+
+function notifyWorkspaceChanged(win) {
+  const state = windowState.get(win.id);
+  if (!state) return;
+  state.sidebarView.webContents.send('workspace:changed', state.workspaceDir);
+}
+
+function notifyCurrentFileChanged(win) {
+  const state = windowState.get(win.id);
+  if (!state) return;
+  state.sidebarView.webContents.send('workspace:currentFileChanged', state.currentFilePath);
+}
+
+function refreshFileList(win) {
+  notifyFilesChanged(win);
+}
+
+function debounceRefresh(dir, entry) {
+  if (entry.debounceTimer) clearTimeout(entry.debounceTimer);
+  entry.debounceTimer = setTimeout(() => {
+    entry.debounceTimer = null;
+    for (const winId of entry.subscribers) {
+      const state = windowState.get(winId);
+      if (state) notifyFilesChanged(state.win);
+    }
+  }, 200);
+}
+
+function watchWorkspace(dir, winId) {
+  if (!dir) return;
+
+  const existing = workspaceWatchers.get(dir);
+  if (existing) {
+    existing.subscribers.add(winId);
+    return;
+  }
+
+  const entry = { subscribers: new Set([winId]), debounceTimer: null, watcher: null };
+  try {
+    entry.watcher = fs.watch(dir, { persistent: true }, () => debounceRefresh(dir, entry));
+  } catch (err) {
+    console.error('Failed to watch workspace folder:', err);
+  }
+  workspaceWatchers.set(dir, entry);
+}
+
+function unwatchWorkspace(dir, winId) {
+  if (!dir) return;
+  const entry = workspaceWatchers.get(dir);
+  if (!entry) return;
+
+  entry.subscribers.delete(winId);
+  if (entry.subscribers.size === 0) {
+    if (entry.debounceTimer) clearTimeout(entry.debounceTimer);
+    if (entry.watcher) entry.watcher.close();
+    workspaceWatchers.delete(dir);
+  }
+}
+
+function setWorkspace(win, dir) {
+  const state = windowState.get(win.id);
+  if (!state) return;
+
+  if (state.workspaceDir && state.workspaceDir !== dir) {
+    unwatchWorkspace(state.workspaceDir, win.id);
+  }
+
+  state.workspaceDir = dir || null;
+
+  if (state.workspaceDir) {
+    watchWorkspace(state.workspaceDir, win.id);
+  }
+
+  notifyWorkspaceChanged(win);
+  notifyFilesChanged(win);
+}
+
+async function chooseWorkspaceFolder(win) {
+  if (!win) return;
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    properties: ['openDirectory'],
+  });
+  if (canceled || !filePaths || !filePaths[0]) return;
+
+  const dir = filePaths[0];
+  setWorkspace(win, dir);
+  saveWorkspaceState({ ...loadWorkspaceState(), lastWorkspaceDir: dir });
+}
+
+async function openFileDialogInWindow(win) {
+  if (!win) return;
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    properties: ['openFile'],
+    filters: [{ name: 'Excalidraw Files', extensions: ['excalidraw'] }],
+  });
+  if (canceled || !filePaths[0]) return;
+  await openFileInWindow(win, filePaths[0]);
+}
+
+function computeNewFilePath(dir) {
+  let candidate = path.join(dir, 'Untitled.excalidraw');
+  let counter = 2;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(dir, `Untitled (${counter}).excalidraw`);
+    counter += 1;
+  }
+  return candidate;
+}
+
+async function createNewFileInWindow(win) {
+  const state = windowState.get(win.id);
+  if (!state || !state.workspaceDir) return false;
+
+  const newPath = computeNewFilePath(state.workspaceDir);
+  const skeleton = {
+    type: 'excalidraw',
+    version: 2,
+    source: 'https://excalidraw.com',
+    elements: [],
+    appState: {},
+    files: {},
+  };
+
+  try {
+    fs.writeFileSync(newPath, JSON.stringify(skeleton, null, 2));
+  } catch (err) {
+    dialog.showErrorBox('New File Failed', err.message || String(err));
+    return false;
+  }
+
+  refreshFileList(win);
+  return openFileInWindow(win, newPath);
+}
+
+function sanitizeFileName(name) {
+  const stripped = String(name || '')
+    .replace(/[\\/:*?"<>|]/g, '')
+    .trim();
+  if (!stripped) return '';
+  return stripped.endsWith('.excalidraw') ? stripped : `${stripped}.excalidraw`;
+}
+
+async function renameFileInWindow(win, oldPath, newName) {
+  const state = windowState.get(win.id);
+  if (!state || !state.workspaceDir) return false;
+
+  const sanitized = sanitizeFileName(newName);
+  if (!sanitized || sanitized === '.excalidraw') return false;
+
+  const newPath = path.join(state.workspaceDir, sanitized);
+  if (newPath === oldPath) return true;
+
+  if (fs.existsSync(newPath)) {
+    dialog.showErrorBox('Rename Failed', `A file named "${sanitized}" already exists.`);
+    return false;
+  }
+
+  try {
+    fs.renameSync(oldPath, newPath);
+  } catch (err) {
+    dialog.showErrorBox('Rename Failed', err.message || String(err));
+    return false;
+  }
+
+  if (state.currentFilePath === oldPath) {
+    state.currentFilePath = newPath;
+    win.setTitle(`${path.basename(newPath)} — Excalidraw`);
+    notifyCurrentFileChanged(win);
+  }
+
+  refreshFileList(win);
+  return true;
+}
+
+async function deleteFileInWindow(win, filePath) {
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'warning',
+    buttons: ['Move to Trash', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    message: `Delete "${path.basename(filePath)}"?`,
+    detail: 'The file will be moved to the trash.',
+  });
+  if (response !== 0) return false;
+
+  try {
+    await shell.trashItem(filePath);
+  } catch (err) {
+    dialog.showErrorBox('Delete Failed', err.message || String(err));
+    return false;
+  }
+
+  const state = windowState.get(win.id);
+  if (state) {
+    if (state.currentFilePath === filePath) {
+      state.currentFilePath = null;
+      win.setTitle('Excalidraw');
+      notifyCurrentFileChanged(win);
+    }
+    refreshFileList(win);
+  }
+  return true;
+}
+
+function layoutViews(win) {
+  const state = windowState.get(win.id);
+  if (!state) return;
+
+  const { width, height } = win.getContentBounds();
+
+  if (state.sidebarVisible) {
+    state.sidebarView.setBounds({ x: 0, y: 0, width: SIDEBAR_WIDTH, height });
+    state.contentView.setBounds({ x: SIDEBAR_WIDTH, y: 0, width: Math.max(0, width - SIDEBAR_WIDTH), height });
+  } else {
+    state.contentView.setBounds({ x: 0, y: 0, width, height });
+  }
+}
+
+function toggleSidebar(win) {
+  if (!win) return;
+  const state = windowState.get(win.id);
+  if (!state) return;
+
+  state.sidebarVisible = !state.sidebarVisible;
+
+  if (state.sidebarVisible) {
+    win.contentView.addChildView(state.sidebarView);
+  } else {
+    win.contentView.removeChildView(state.sidebarView);
+  }
+
+  layoutViews(win);
+  saveWorkspaceState({ ...loadWorkspaceState(), sidebarVisible: state.sidebarVisible });
+}
+
 function createWindow(filePath) {
-  const windowState = loadWindowState();
+  const savedWindowState = loadWindowState();
+  const workspacePrefs = loadWorkspaceState();
+
   const win = new BrowserWindow({
     ...DEFAULT_WINDOW_BOUNDS,
-    ...windowState.bounds,
+    ...savedWindowState.bounds,
+  });
+
+  if (savedWindowState.isMaximized) {
+    win.maximize();
+  }
+
+  const contentView = new WebContentsView({
     webPreferences: {
       nodeIntegration: true,
     },
   });
 
-  if (windowState.isMaximized) {
-    win.maximize();
-  }
-
-  win.on('close', () => {
-    saveWindowState(win);
+  const sidebarView = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, 'sidebar', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
   });
 
-  win.loadURL('https://excalidraw.com/');
+  const sidebarVisible = workspacePrefs.sidebarVisible !== false;
+
+  windowState.set(win.id, {
+    win,
+    contentView,
+    sidebarView,
+    sidebarVisible,
+    workspaceDir: null,
+    currentFilePath: null,
+    lastSavedSnapshotHash: null,
+    forceClosing: false,
+  });
+
+  if (sidebarVisible) {
+    win.contentView.addChildView(sidebarView);
+  }
+  win.contentView.addChildView(contentView);
+
+  sidebarView.webContents.loadFile(path.join(__dirname, 'sidebar', 'index.html'));
+  contentView.webContents.loadURL('https://excalidraw.com/');
+
+  layoutViews(win);
+  win.on('resize', () => layoutViews(win));
 
   // Hide menu bar visually for Windows and Linux, but keep keyboard shortcuts working
   if (process.platform === 'win32' || process.platform === 'linux') {
@@ -330,15 +881,119 @@ function createWindow(filePath) {
     win.setAutoHideMenuBar(true);
   }
 
+  const initialWorkspaceDir = filePath
+    ? path.dirname(filePath)
+    : workspacePrefs.lastWorkspaceDir && fs.existsSync(workspacePrefs.lastWorkspaceDir)
+      ? workspacePrefs.lastWorkspaceDir
+      : null;
+
+  setWorkspace(win, initialWorkspaceDir);
+
   // If a file was requested, load it once the page is ready
   if (filePath) {
-    win.webContents.once('did-finish-load', () => {
+    contentView.webContents.once('did-finish-load', () => {
       loadFileIntoWindow(win, filePath);
     });
   }
 
+  contentView.webContents.once('did-finish-load', () => {
+    contentView.webContents.focus();
+  });
+
+  win.on('close', (event) => {
+    const state = windowState.get(win.id);
+    if (!state || state.forceClosing) {
+      return;
+    }
+
+    event.preventDefault();
+
+    (async () => {
+      if (await hasUnsavedChanges(win)) {
+        const { response } = await dialog.showMessageBox(win, {
+          type: 'warning',
+          buttons: ['Save', "Don't Save", 'Cancel'],
+          defaultId: 0,
+          cancelId: 2,
+          message: 'Do you want to save the changes you made?',
+          detail: "Your changes will be lost if you don't save them.",
+        });
+
+        if (response === 2) return; // Cancel
+        if (response === 0) {
+          const saved = await saveCurrentWindow(win);
+          if (!saved) return;
+        }
+      }
+
+      saveWindowState(win);
+      state.forceClosing = true;
+      win.close();
+    })();
+  });
+
+  win.on('closed', () => {
+    const state = windowState.get(win.id);
+    if (state && state.workspaceDir) {
+      unwatchWorkspace(state.workspaceDir, win.id);
+    }
+    windowState.delete(win.id);
+  });
+
   return win;
 }
+
+ipcMain.handle('workspace:selectFolder', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win) await chooseWorkspaceFolder(win);
+});
+
+ipcMain.handle('workspace:getState', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const state = win && windowState.get(win.id);
+  if (!state) return { workspaceDir: null, files: [], currentFilePath: null };
+  return {
+    workspaceDir: state.workspaceDir,
+    files: scanWorkspaceFiles(state.workspaceDir),
+    currentFilePath: state.currentFilePath,
+  };
+});
+
+ipcMain.handle('file:open', async (event, filePath) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return false;
+  return openFileInWindow(win, filePath);
+});
+
+ipcMain.handle('file:new', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return false;
+  return createNewFileInWindow(win);
+});
+
+ipcMain.handle('file:rename', async (event, { oldPath, newName }) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return false;
+  return renameFileInWindow(win, oldPath, newName);
+});
+
+ipcMain.handle('file:delete', async (event, filePath) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return false;
+  return deleteFileInWindow(win, filePath);
+});
+
+ipcMain.handle('file:save', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return false;
+  return saveCurrentWindow(win);
+});
+
+ipcMain.handle('file:saveAs', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return false;
+  return saveAsCurrentWindow(win);
+});
 
 // macOS: open-file fires when a file is double-clicked or dragged onto the dock icon
 // This can fire BEFORE app 'ready', so we store the path for later
@@ -422,6 +1077,62 @@ const template = [
         },
       ]
     : []),
+  {
+    label: 'File',
+    submenu: [
+      {
+        label: 'New File',
+        accelerator: 'CmdOrCtrl+N',
+        click: () => {
+          const win = BrowserWindow.getFocusedWindow();
+          if (win) void createNewFileInWindow(win);
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Open File...',
+        accelerator: 'CmdOrCtrl+O',
+        click: () => {
+          const win = BrowserWindow.getFocusedWindow();
+          if (win) void openFileDialogInWindow(win);
+        },
+      },
+      {
+        label: 'Open Folder...',
+        accelerator: 'CmdOrCtrl+Shift+O',
+        click: () => {
+          const win = BrowserWindow.getFocusedWindow();
+          if (win) void chooseWorkspaceFolder(win);
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Save',
+        accelerator: 'CmdOrCtrl+S',
+        click: () => {
+          const win = BrowserWindow.getFocusedWindow();
+          if (win) void saveCurrentWindow(win);
+        },
+      },
+      {
+        label: 'Save As...',
+        accelerator: 'CmdOrCtrl+Shift+S',
+        click: () => {
+          const win = BrowserWindow.getFocusedWindow();
+          if (win) void saveAsCurrentWindow(win);
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Toggle Sidebar',
+        accelerator: 'CmdOrCtrl+B',
+        click: () => {
+          const win = BrowserWindow.getFocusedWindow();
+          if (win) toggleSidebar(win);
+        },
+      },
+    ],
+  },
   {
     label: 'Edit',
     submenu: [

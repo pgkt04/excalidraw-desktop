@@ -1,0 +1,187 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f5f5f7;
+  --fg: #1e1e1e;
+  --border: #dcdcdc;
+  --hover: #e8e8ec;
+  --active: #dbe6ff;
+  --active-fg: #1a3d8f;
+  --muted: #7a7a7a;
+  --danger: #c0392b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #202124;
+    --fg: #e8e8e8;
+    --border: #35363a;
+    --hover: #2b2c30;
+    --active: #2a3b5c;
+    --active-fg: #9cc0ff;
+    --muted: #9a9a9a;
+    --danger: #ff6b5e;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+}
+
+.workspace-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.icon-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  color: var(--fg);
+}
+
+.icon-btn:hover {
+  background: var(--hover);
+}
+
+.toolbar {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.new-file-btn,
+#choose-folder-btn {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--hover);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.new-file-btn:hover,
+#choose-folder-btn:hover {
+  background: var(--active);
+}
+
+.new-file-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.empty-state {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--muted);
+  display: none;
+}
+
+.empty-state p {
+  margin: 0 0 12px;
+}
+
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin: 0 4px;
+}
+
+.file-row:hover {
+  background: var(--hover);
+}
+
+.file-row.active {
+  background: var(--active);
+  color: var(--active-fg);
+  font-weight: 600;
+}
+
+.file-row .file-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-row .file-actions {
+  display: none;
+  gap: 2px;
+}
+
+.file-row:hover .file-actions {
+  display: flex;
+}
+
+.file-row .file-actions button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: var(--muted);
+}
+
+.file-row .file-actions button:hover {
+  background: var(--border);
+  color: var(--fg);
+}
+
+.file-row .rename-input {
+  flex: 1;
+  font: inherit;
+  padding: 2px 4px;
+  border: 1px solid var(--active-fg);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.no-files {
+  padding: 16px;
+  text-align: center;
+  color: var(--muted);
+}
