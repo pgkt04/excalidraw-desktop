@@ -22,6 +22,8 @@ let updateCheckPromise = null;
 const windowState = new Map();
 // Per-directory watchers, refcounted across windows: dir -> { watcher, subscribers: Set<winId>, debounceTimer }
 const workspaceWatchers = new Map();
+// In-flight New File dialogs, keyed by the dialog window's webContents.id: -> { resolve, existingNames }
+const pendingNewFileDialogs = new Map();
 
 function normalizeVersion(version) {
   return String(version || '')
@@ -724,21 +726,138 @@ async function openFileDialogInWindow(win) {
   await openFileInWindow(win, filePaths[0]);
 }
 
-function computeNewFilePath(dir) {
-  let candidate = path.join(dir, 'Untitled.excalidraw');
+const ILLEGAL_FILENAME_CHARS_REGEX = /[\\/:*?"<>|\x00-\x1F]/g;
+const WINDOWS_RESERVED_NAMES = new Set([
+  'CON',
+  'PRN',
+  'AUX',
+  'NUL',
+  'COM1',
+  'COM2',
+  'COM3',
+  'COM4',
+  'COM5',
+  'COM6',
+  'COM7',
+  'COM8',
+  'COM9',
+  'LPT1',
+  'LPT2',
+  'LPT3',
+  'LPT4',
+  'LPT5',
+  'LPT6',
+  'LPT7',
+  'LPT8',
+  'LPT9',
+]);
+const MAX_BASENAME_LENGTH = 150;
+
+// Includes time down to the second so repeated "New File" calls in the same
+// minute (e.g. blank-name submits) don't collide and fall through to the
+// " (2)", " (3)", ... suffix.
+function formatDateForFilename(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
+}
+
+// Sanitizes a user-supplied base name (no extension) for use as a filename.
+// Returns '' if nothing usable remains; callers decide the fallback.
+function sanitizeBaseName(name) {
+  let result = String(name || '').replace(ILLEGAL_FILENAME_CHARS_REGEX, '');
+  result = result.replace(/\.excalidraw$/i, '');
+  // Windows silently drops trailing dots/spaces from the actual filename on disk,
+  // which would otherwise desync what's shown from what's created.
+  result = result.trim().replace(/[. ]+$/, '');
+  if (!result) return '';
+  if (WINDOWS_RESERVED_NAMES.has(result.toUpperCase())) return '';
+  return result.slice(0, MAX_BASENAME_LENGTH);
+}
+
+function ensureExcalidrawExtension(name) {
+  return name.endsWith('.excalidraw') ? name : `${name}.excalidraw`;
+}
+
+function computeNewFilePath(dir, baseName) {
+  const sanitized = sanitizeBaseName(baseName) || 'Untitled';
+  let candidate = path.join(dir, ensureExcalidrawExtension(sanitized));
   let counter = 2;
   while (fs.existsSync(candidate)) {
-    candidate = path.join(dir, `Untitled (${counter}).excalidraw`);
+    candidate = path.join(dir, `${sanitized} (${counter}).excalidraw`);
     counter += 1;
   }
   return candidate;
+}
+
+// Shows a small modal BrowserWindow prompting for a new file's base name.
+// Resolves the entered name, or null if the dialog was cancelled/closed.
+function promptForNewFileName(parentWin, defaultName, existingNames) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const dialogWin = new BrowserWindow({
+      width: 420,
+      height: 220,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      modal: true,
+      parent: parentWin,
+      show: false,
+      title: 'New File',
+      webPreferences: {
+        preload: path.join(__dirname, 'dialogs', 'new-file-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+
+    // Windows/Linux would otherwise inherit the app's full menu bar on this tiny window.
+    dialogWin.setMenu(null);
+
+    // Captured up front: by the time 'closed' fires, dialogWin.webContents has
+    // already been destroyed, so re-reading .webContents.id there throws.
+    const webContentsId = dialogWin.webContents.id;
+    pendingNewFileDialogs.set(webContentsId, { resolve: settle, existingNames });
+
+    dialogWin.on('closed', () => {
+      pendingNewFileDialogs.delete(webContentsId);
+      settle(null);
+    });
+
+    dialogWin.once('ready-to-show', () => dialogWin.show());
+
+    dialogWin.loadFile(path.join(__dirname, 'dialogs', 'new-file-dialog.html'), {
+      query: { default: defaultName },
+    });
+  });
 }
 
 async function createNewFileInWindow(win) {
   const state = windowState.get(win.id);
   if (!state || !state.workspaceDir) return false;
 
-  const newPath = computeNewFilePath(state.workspaceDir);
+  const defaultName = `drawing_${formatDateForFilename()}`;
+  const existingNames = fs
+    .readdirSync(state.workspaceDir)
+    .filter((f) => f.endsWith('.excalidraw'))
+    .map((f) => f.slice(0, -'.excalidraw'.length).toLowerCase());
+  const inputName = await promptForNewFileName(win, defaultName, existingNames);
+  if (inputName === null) return false; // user cancelled
+
+  const baseName = inputName.trim() || defaultName;
+  const newPath = computeNewFilePath(state.workspaceDir, baseName);
   const skeleton = {
     type: 'excalidraw',
     version: 2,
@@ -760,11 +879,9 @@ async function createNewFileInWindow(win) {
 }
 
 function sanitizeFileName(name) {
-  const stripped = String(name || '')
-    .replace(/[\\/:*?"<>|]/g, '')
-    .trim();
-  if (!stripped) return '';
-  return stripped.endsWith('.excalidraw') ? stripped : `${stripped}.excalidraw`;
+  const sanitized = sanitizeBaseName(name);
+  if (!sanitized) return '';
+  return ensureExcalidrawExtension(sanitized);
 }
 
 async function renameFileInWindow(win, oldPath, newName) {
@@ -1068,6 +1185,26 @@ ipcMain.handle('file:saveAs', async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win) return false;
   return saveAsCurrentWindow(win);
+});
+
+ipcMain.handle('dialog:new-file-submit', (event, name) => {
+  const entry = pendingNewFileDialogs.get(event.sender.id);
+  if (!entry) return;
+  pendingNewFileDialogs.delete(event.sender.id);
+  entry.resolve(name);
+  BrowserWindow.fromWebContents(event.sender)?.close();
+});
+
+ipcMain.handle('dialog:new-file-cancel', (event) => {
+  const entry = pendingNewFileDialogs.get(event.sender.id);
+  if (!entry) return;
+  pendingNewFileDialogs.delete(event.sender.id);
+  entry.resolve(null);
+  BrowserWindow.fromWebContents(event.sender)?.close();
+});
+
+ipcMain.handle('dialog:new-file-getExistingNames', (event) => {
+  return pendingNewFileDialogs.get(event.sender.id)?.existingNames ?? [];
 });
 
 // macOS: open-file fires when a file is double-clicked or dragged onto the dock icon
