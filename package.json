@@ -30,6 +30,8 @@
     "files": [
       "build/**/*",
       "node_modules/**/*",
+      "sidebar/**/*",
+      "dialogs/**/*",
       "index.js",
       "package.json"
     ],
