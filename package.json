@@ -1,7 +1,7 @@
 {
   "name": "excalidraw",
   "productName": "Excalidraw",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -18,8 +18,8 @@
   "license": "ISC",
   "description": "Excalidraw desktop application for Linux, Windows, and Mac.",
   "devDependencies": {
-    "electron": "^42.3.3",
-    "electron-builder": "^26.15.0"
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "app.excalidraw",
