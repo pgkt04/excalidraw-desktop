@@ -13,6 +13,7 @@ const WINDOW_STATE_FILE = 'window-state.json';
 const WORKSPACE_STATE_FILE = 'workspace-state.json';
 const DEFAULT_WINDOW_BOUNDS = { width: 1300, height: 900 };
 const SIDEBAR_WIDTH = 260;
+const SIDEBAR_COLLAPSED_WIDTH = 28;
 
 // Track file paths requested before the app is ready (macOS open-file can fire early)
 let pendingFilePath = null;
@@ -894,7 +895,11 @@ async function renameFileInWindow(win, oldPath, newName) {
   const newPath = path.join(state.workspaceDir, sanitized);
   if (newPath === oldPath) return true;
 
-  if (fs.existsSync(newPath)) {
+  // On case-insensitive filesystems (macOS/Windows) a case-only rename makes
+  // existsSync(newPath) match the file being renamed itself — allow that case
+  // through so users can fix capitalization.
+  const isCaseOnlyRename = newPath.toLowerCase() === oldPath.toLowerCase();
+  if (!isCaseOnlyRename && fs.existsSync(newPath)) {
     dialog.showErrorBox('Rename Failed', `A file named "${sanitized}" already exists.`);
     return false;
   }
@@ -951,13 +956,10 @@ function layoutViews(win) {
   if (!state) return;
 
   const { width, height } = win.getContentBounds();
+  const sidebarWidth = state.sidebarVisible ? SIDEBAR_WIDTH : SIDEBAR_COLLAPSED_WIDTH;
 
-  if (state.sidebarVisible) {
-    state.sidebarView.setBounds({ x: 0, y: 0, width: SIDEBAR_WIDTH, height });
-    state.contentView.setBounds({ x: SIDEBAR_WIDTH, y: 0, width: Math.max(0, width - SIDEBAR_WIDTH), height });
-  } else {
-    state.contentView.setBounds({ x: 0, y: 0, width, height });
-  }
+  state.sidebarView.setBounds({ x: 0, y: 0, width: sidebarWidth, height });
+  state.contentView.setBounds({ x: sidebarWidth, y: 0, width: Math.max(0, width - sidebarWidth), height });
 }
 
 function toggleSidebar(win) {
@@ -967,13 +969,8 @@ function toggleSidebar(win) {
 
   state.sidebarVisible = !state.sidebarVisible;
 
-  if (state.sidebarVisible) {
-    win.contentView.addChildView(state.sidebarView);
-  } else {
-    win.contentView.removeChildView(state.sidebarView);
-  }
-
   layoutViews(win);
+  state.sidebarView.webContents.send('sidebar:collapsedChanged', !state.sidebarVisible);
   saveWorkspaceState({ ...loadWorkspaceState(), sidebarVisible: state.sidebarVisible });
 }
 
@@ -1037,9 +1034,7 @@ function createWindow(filePath) {
   contentView.webContents.on('before-input-event', handleSaveShortcut);
   sidebarView.webContents.on('before-input-event', handleSaveShortcut);
 
-  if (sidebarVisible) {
-    win.contentView.addChildView(sidebarView);
-  }
+  win.contentView.addChildView(sidebarView);
   win.contentView.addChildView(contentView);
 
   sidebarView.webContents.loadFile(path.join(__dirname, 'sidebar', 'index.html'));
@@ -1143,12 +1138,18 @@ ipcMain.handle('workspace:selectFolder', async (event) => {
 ipcMain.handle('workspace:getState', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const state = win && windowState.get(win.id);
-  if (!state) return { workspaceDir: null, files: [], currentFilePath: null };
+  if (!state) return { workspaceDir: null, files: [], currentFilePath: null, collapsed: false };
   return {
     workspaceDir: state.workspaceDir,
     files: scanWorkspaceFiles(state.workspaceDir),
     currentFilePath: state.currentFilePath,
+    collapsed: !state.sidebarVisible,
   };
+});
+
+ipcMain.handle('sidebar:toggle', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win) toggleSidebar(win);
 });
 
 ipcMain.handle('file:open', async (event, filePath) => {

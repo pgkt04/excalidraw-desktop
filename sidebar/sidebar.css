@@ -42,6 +42,23 @@ body {
   height: 100vh;
 }
 
+.collapsed-rail {
+  display: none;
+  height: 100vh;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 8px;
+  border-right: 1px solid var(--border);
+}
+
+body.collapsed .sidebar {
+  display: none;
+}
+
+body.collapsed .collapsed-rail {
+  display: flex;
+}
+
 .workspace-header {
   display: flex;
   align-items: center;

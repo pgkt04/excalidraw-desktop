@@ -5,6 +5,8 @@
   const newFileBtn = document.getElementById('new-file-btn');
   const emptyStateEl = document.getElementById('empty-state');
   const fileListEl = document.getElementById('file-list');
+  const collapseBtn = document.getElementById('collapse-btn');
+  const expandBtn = document.getElementById('expand-btn');
 
   let currentFiles = [];
   let currentFilePath = null;
@@ -58,6 +60,7 @@
     const nameSpan = document.createElement('span');
     nameSpan.className = 'file-name';
     nameSpan.textContent = basename(file.path);
+    nameSpan.title = basename(file.path);
     li.appendChild(nameSpan);
 
     const actions = document.createElement('span');
@@ -95,7 +98,10 @@
     editingPath = null;
     const trimmed = rawName.trim();
     if (trimmed && trimmed !== basename(oldPath)) {
-      window.workspaceAPI.renameFile(oldPath, trimmed);
+      // Re-render regardless of outcome: on success the filesChanged event
+      // refreshes the list anyway, but on failure nothing else would remove
+      // the stale rename input.
+      window.workspaceAPI.renameFile(oldPath, trimmed).finally(() => renderFileList(currentFiles));
     } else {
       renderFileList(currentFiles);
     }
@@ -123,9 +129,17 @@
     renderFileList(currentFiles);
   }
 
+  function setCollapsed(collapsed) {
+    document.body.classList.toggle('collapsed', Boolean(collapsed));
+  }
+
   changeFolderBtn.addEventListener('click', () => window.workspaceAPI.selectFolder());
   chooseFolderBtn.addEventListener('click', () => window.workspaceAPI.selectFolder());
   newFileBtn.addEventListener('click', () => window.workspaceAPI.newFile());
+  collapseBtn.addEventListener('click', () => window.workspaceAPI.toggleSidebar());
+  expandBtn.addEventListener('click', () => window.workspaceAPI.toggleSidebar());
+
+  window.workspaceAPI.onCollapsedChanged(setCollapsed);
 
   window.workspaceAPI.onWorkspaceChanged((workspaceDir) => {
     renderWorkspaceHeader(workspaceDir);
@@ -139,6 +153,7 @@
   window.workspaceAPI.getInitialState().then((state) => {
     if (!state) return;
     currentFilePath = state.currentFilePath || null;
+    setCollapsed(state.collapsed);
     renderWorkspaceHeader(state.workspaceDir);
     renderFileList(state.files);
   });

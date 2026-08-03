@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld('workspaceAPI', {
   saveCurrent: () => ipcRenderer.invoke('file:save'),
   saveCurrentAs: () => ipcRenderer.invoke('file:saveAs'),
 
+  toggleSidebar: () => ipcRenderer.invoke('sidebar:toggle'),
+  onCollapsedChanged: (cb) => {
+    ipcRenderer.on('sidebar:collapsedChanged', (_event, collapsed) => cb(collapsed));
+  },
+
   onFilesChanged: (cb) => {
     ipcRenderer.on('workspace:filesChanged', (_event, files) => cb(files));
   },
