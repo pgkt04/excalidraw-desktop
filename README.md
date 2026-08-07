@@ -1,4 +1,9 @@
 # excalidraw-desktop
+
+<!-- hy-mt2-i18n:start -->
+**English** | [中文](./README_zh-CN.md) | [日本語](./README_ja.md) | [Español](./README_es.md)
+<!-- hy-mt2-i18n:end -->
+
 Unofficial desktop client for Excalidraw on Windows, macOS, and Linux. It is just an electron wrapper for the website, I made this because I don't want to use it in a tab.
 
 > **Note:** This loads the live [excalidraw.com](https://excalidraw.com) website — an internet connection is needed for the first launch. Subsequent launches may work offline thanks to browser caching.
