@@ -1043,10 +1043,10 @@ function createWindow(filePath) {
   layoutViews(win);
   win.on('resize', () => layoutViews(win));
 
-  // Hide menu bar visually for Windows and Linux, but keep keyboard shortcuts working
+  // Hide menu bar visually for Windows and Linux, but still keeps keyboard shortcuts working
   if (process.platform === 'win32' || process.platform === 'linux') {
     win.setMenuBarVisibility(false);
-    win.setAutoHideMenuBar(true);
+    win.setAutoHideMenuBar(false);
   }
 
   const initialWorkspaceDir = filePath
