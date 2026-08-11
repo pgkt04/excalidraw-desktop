@@ -1056,30 +1056,29 @@ function createWindow(filePath) {
       : null;
 
   setWorkspace(win, initialWorkspaceDir);
-
+  
   // If a file was requested, load it once the page is ready
   if (filePath) {
     contentView.webContents.once('did-finish-load', () => {
       loadFileIntoWindow(win, filePath);
     });
   } else {
-    // A brand-new window with no file yet still loads excalidraw.com's last
-    // persisted localStorage content — it's the same session/profile shared
-    // across windows and app restarts, so leftover elements from a previous
-    // drawing can still be sitting there. Since no file is loaded yet,
-    // hasUnsavedChanges() falls into its "never saved" check (elements.length
-    // > 0), which would then see that leftover content and show a
-    // false-positive save prompt the first time this window opens/creates a
-    // file, even though nothing was drawn here. Clear it so a fresh window
-    // actually starts blank.
     contentView.webContents.once('did-finish-load', () => {
       contentView.webContents.executeJavaScript(`
         try {
-          localStorage.setItem("excalidraw", "[]");
-          localStorage.setItem("excalidraw-state", "{}");
-          localStorage.setItem("excalidraw-files", "{}");
-        } catch (e) {}
-      `);
+          const setItem = Storage.prototype.setItem.bind(localStorage);
+          localStorage.setItem = function () {}; 
+          setItem("excalidraw", "[]");
+          setItem("excalidraw-state", "{}");
+          setItem("excalidraw-files", "{}");
+          true;
+        } catch (e) {
+          console.error("Failed to clear excalidraw data:", e);
+          false;
+        }
+      `).then(() => {
+        contentView.webContents.reload();
+      });
     });
   }
 
