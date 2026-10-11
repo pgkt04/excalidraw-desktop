@@ -248,3 +248,7 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.toptal.com/developers/gitignore/api/windows,macos,react,node,linux,visualstudiocode
+
+# Pinned excalidraw-app build (npm run build:excalidraw)
+/app-bundle/
+/.excalidraw-src/

@@ -1,7 +1,7 @@
 # excalidraw-desktop
 Unofficial desktop client for Excalidraw on Windows, macOS, and Linux. It is just an electron wrapper for the website, I made this because I don't want to use it in a tab.
 
-> **Note:** This loads the live [excalidraw.com](https://excalidraw.com) website — an internet connection is needed for the first launch. Subsequent launches may work offline thanks to browser caching.
+> **Offline:** The app loads the live [excalidraw.com](https://excalidraw.com). After one online launch, its service worker caches the app and every font, so later launches work offline. If excalidraw.com cannot load at all (for example, a first launch without a connection), the app falls back to a bundled copy of Excalidraw. The bundled copy keeps its own library and preferences, and live collaboration and share links still need a connection.
 
 ![windows client](./resources/windows.png)
 
@@ -47,6 +47,12 @@ Install the dependencies:
 ```bash
 npm install
 ```
+
+Build the bundled offline fallback (a pinned [excalidraw-app](https://github.com/excalidraw/excalidraw/tree/master/excalidraw-app) commit, set in `scripts/build-excalidraw.js`, built into `app-bundle/`):
+```bash
+npm run build:excalidraw
+```
+It needs git and a network connection, and fetches yarn through `npx`. The `dist` scripts run it first. Without `app-bundle/`, `npm start` has no offline fallback.
 
 ### Running
 To run the app in development mode:
