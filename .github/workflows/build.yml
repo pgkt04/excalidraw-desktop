@@ -154,7 +154,9 @@ jobs:
 
       - name: Get version from package.json
         id: version
-        run: echo "version=$(node -p 'require(\"./package.json\").version')" >> "$GITHUB_OUTPUT"
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v5
@@ -169,6 +171,7 @@ jobs:
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: Excalidraw Desktop v${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
           draft: true
           generate_release_notes: true
           files: |
