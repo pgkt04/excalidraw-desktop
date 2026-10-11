@@ -1,17 +1,18 @@
 {
   "name": "excalidraw",
   "productName": "Excalidraw",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "electron .",
-    "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
-    "dist:win": "electron-builder --win",
-    "dist:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
-    "dist:linux": "electron-builder --linux",
-    "dist:appimage": "electron-builder --linux AppImage",
-    "dist:deb": "electron-builder --linux deb"
+    "build:excalidraw": "node scripts/build-excalidraw.js",
+    "dist": "npm run build:excalidraw && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
+    "dist:win": "npm run build:excalidraw && electron-builder --win",
+    "dist:mac": "npm run build:excalidraw && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
+    "dist:linux": "npm run build:excalidraw && electron-builder --linux",
+    "dist:appimage": "npm run build:excalidraw && electron-builder --linux AppImage",
+    "dist:deb": "npm run build:excalidraw && electron-builder --linux deb"
   },
   "keywords": [],
   "author": "",
@@ -29,6 +30,7 @@
     },
     "files": [
       "build/**/*",
+      "app-bundle/**/*",
       "node_modules/**/*",
       "sidebar/**/*",
       "dialogs/**/*",

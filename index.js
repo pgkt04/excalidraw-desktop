@@ -1,7 +1,8 @@
-const { app, BrowserWindow, WebContentsView, Menu, Notification, dialog, screen, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, Notification, dialog, screen, shell, ipcMain, protocol, net } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { pathToFileURL } = require('url');
 
 const GITHUB_OWNER = 'pgkt04';
 const GITHUB_REPO = 'excalidraw-desktop';
@@ -14,6 +15,16 @@ const WORKSPACE_STATE_FILE = 'workspace-state.json';
 const DEFAULT_WINDOW_BOUNDS = { width: 1300, height: 900 };
 const SIDEBAR_WIDTH = 260;
 const SIDEBAR_COLLAPSED_WIDTH = 28;
+const EXCALIDRAW_ORIGIN = 'https://excalidraw.com';
+const EXCALIDRAW_URL = `${EXCALIDRAW_ORIGIN}/`;
+const BUNDLE_ORIGIN = 'app://bundle';
+const BUNDLE_URL = `${BUNDLE_ORIGIN}/`;
+const BUNDLE_DIR = path.join(__dirname, 'app-bundle');
+const HAS_BUNDLE = fs.existsSync(path.join(BUNDLE_DIR, 'index.html'));
+const CONTENT_ORIGINS = new Set([EXCALIDRAW_ORIGIN, BUNDLE_ORIGIN]);
+const ERR_ABORTED = -3;
+const FONT_CACHE_DELAY_MS = 5000;
+const FONTS_CACHED_KEY = 'excalidraw-desktop-fonts-cached';
 
 // Track file paths requested before the app is ready (macOS open-file can fire early)
 let pendingFilePath = null;
@@ -974,6 +985,59 @@ function toggleSidebar(win) {
   saveWorkspaceState({ ...loadWorkspaceState(), sidebarVisible: state.sidebarVisible });
 }
 
+function serveBundle(request) {
+  const notFound = () => new Response('Not found', { status: 404 });
+  const { host, pathname } = new URL(request.url);
+  let filePath;
+  try {
+    filePath = path.join(BUNDLE_DIR, decodeURIComponent(pathname === '/' ? '/index.html' : pathname));
+  } catch {
+    return notFound();
+  }
+  if (host !== 'bundle' || !filePath.startsWith(BUNDLE_DIR + path.sep)) return notFound();
+  return net.fetch(pathToFileURL(filePath).toString()).catch(notFound);
+}
+
+const mainFrameHttpStatus = new WeakMap();
+
+function trackMainFrameHttpStatus(webContents) {
+  webContents.on('did-navigate', (_event, _url, httpResponseCode) => {
+    mainFrameHttpStatus.set(webContents, httpResponseCode);
+  });
+}
+
+// 'did-finish-load' also fires for Chromium's error page (opaque origin) and for HTTP error responses.
+function onceContentLoaded(webContents, callback) {
+  const onFinish = () => {
+    if (!CONTENT_ORIGINS.has(webContents.mainFrame.origin) || mainFrameHttpStatus.get(webContents) >= 400) return;
+    webContents.off('did-finish-load', onFinish);
+    callback();
+  };
+  webContents.on('did-finish-load', onFinish);
+}
+
+// excalidraw.com's service worker caches a font only after the page uses it, so load
+// every face once per excalidraw.com build to make all of them work offline.
+function cacheAllFontsForOffline(webContents) {
+  if (webContents.isDestroyed()) return;
+  webContents
+    .executeJavaScript(`
+      (async () => {
+        const build = document.querySelector('script[type="module"][src]')?.src;
+        if (localStorage.getItem('${FONTS_CACHED_KEY}') === build) return;
+        if (!navigator.serviceWorker.controller) {
+          await new Promise((resolve) => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
+        }
+        const results = await Promise.allSettled([...document.fonts].map((font) => font.load()));
+        if (results.every((result) => result.status === 'fulfilled')) {
+          Storage.prototype.setItem.call(localStorage, '${FONTS_CACHED_KEY}', build);
+        }
+      })();
+      true;
+    `)
+    .catch((err) => console.error('Failed to cache fonts for offline use:', err));
+}
+
 function createWindow(filePath) {
   const savedWindowState = loadWindowState();
   const workspacePrefs = loadWorkspaceState();
@@ -1038,7 +1102,68 @@ function createWindow(filePath) {
   win.contentView.addChildView(contentView);
 
   sidebarView.webContents.loadFile(path.join(__dirname, 'sidebar', 'index.html'));
-  contentView.webContents.loadURL('https://excalidraw.com/');
+  trackMainFrameHttpStatus(contentView.webContents);
+
+  const initializeContent = () => {
+    if (filePath) return loadFileIntoWindow(win, filePath);
+    return contentView.webContents
+      .executeJavaScript(`
+        try {
+          const setItem = Storage.prototype.setItem.bind(localStorage);
+          localStorage.setItem = function () {};
+          setItem("excalidraw", "[]");
+          setItem("excalidraw-state", "{}");
+          setItem("excalidraw-files", "{}");
+          true;
+        } catch (e) {
+          console.error("Failed to clear excalidraw data:", e);
+          false;
+        }
+      `)
+      .then(
+        () =>
+          new Promise((resolve) => {
+            onceContentLoaded(contentView.webContents, resolve);
+            contentView.webContents.reload();
+          }),
+      );
+  };
+
+  let startupStarted = false;
+  let startupDone = false;
+  const startContent = () => {
+    startupStarted = true;
+    contentView.webContents.focus();
+    void initializeContent().finally(() => {
+      startupDone = true;
+    });
+  };
+
+  // Until the startup load/reload settles, any excalidraw.com failure switches to the bundle.
+  // If startContent already ran on excalidraw.com, it runs again on the bundle.
+  const fallBackToBundle = (url) => {
+    if (startupDone || !HAS_BUNDLE || !url.startsWith(EXCALIDRAW_URL)) return;
+    if (startupStarted) onceContentLoaded(contentView.webContents, startContent);
+    contentView.webContents.loadURL(BUNDLE_URL);
+  };
+  contentView.webContents.on('did-fail-load', (_event, errorCode, _description, validatedURL, isMainFrame) => {
+    if (isMainFrame && errorCode !== ERR_ABORTED) fallBackToBundle(validatedURL);
+  });
+  contentView.webContents.on('did-navigate', (_event, url, httpResponseCode) => {
+    if (httpResponseCode >= 400) fallBackToBundle(url);
+  });
+
+  // Delayed: the page registers its fonts after load, and an executeJavaScript()
+  // next to the startup reload in initializeContent can hang (see withTimeout).
+  let fontCacheTimer = null;
+  contentView.webContents.on('did-finish-load', () => {
+    clearTimeout(fontCacheTimer);
+    if (contentView.webContents.mainFrame.origin !== EXCALIDRAW_ORIGIN) return;
+    fontCacheTimer = setTimeout(() => cacheAllFontsForOffline(contentView.webContents), FONT_CACHE_DELAY_MS);
+  });
+
+  onceContentLoaded(contentView.webContents, startContent);
+  contentView.webContents.loadURL(EXCALIDRAW_URL);
 
   layoutViews(win);
   win.on('resize', () => layoutViews(win));
@@ -1056,35 +1181,6 @@ function createWindow(filePath) {
       : null;
 
   setWorkspace(win, initialWorkspaceDir);
-  
-  // If a file was requested, load it once the page is ready
-  if (filePath) {
-    contentView.webContents.once('did-finish-load', () => {
-      loadFileIntoWindow(win, filePath);
-    });
-  } else {
-    contentView.webContents.once('did-finish-load', () => {
-      contentView.webContents.executeJavaScript(`
-        try {
-          const setItem = Storage.prototype.setItem.bind(localStorage);
-          localStorage.setItem = function () {}; 
-          setItem("excalidraw", "[]");
-          setItem("excalidraw-state", "{}");
-          setItem("excalidraw-files", "{}");
-          true;
-        } catch (e) {
-          console.error("Failed to clear excalidraw data:", e);
-          false;
-        }
-      `).then(() => {
-        contentView.webContents.reload();
-      });
-    });
-  }
-
-  contentView.webContents.once('did-finish-load', () => {
-    contentView.webContents.focus();
-  });
 
   win.on('close', (event) => {
     const state = windowState.get(win.id);
@@ -1233,6 +1329,10 @@ app.on('second-instance', (event, argv) => {
   }
 });
 
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+]);
+
 // Request single instance lock so second-instance events work
 const gotTheLock = app.requestSingleInstanceLock();
 
@@ -1242,6 +1342,8 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.whenReady().then(() => {
+    protocol.handle('app', serveBundle);
+
     // Check if launched with a file path via command line (Windows/Linux)
     const argFilePath = getFilePathFromArgv(process.argv);
     const fileToOpen = pendingFilePath || argFilePath || null;
